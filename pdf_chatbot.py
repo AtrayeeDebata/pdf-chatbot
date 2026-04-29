@@ -3,12 +3,11 @@ import streamlit as st
 import tempfile
 from dotenv import load_dotenv
 
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="PDF Chatbot", page_icon="📄")
@@ -23,18 +22,18 @@ if not GOOGLE_API_KEY:
     st.error("GOOGLE_API_KEY not found! Add it to Streamlit Secrets.")
     st.stop()
 
-os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+genai.configure(api_key=GOOGLE_API_KEY)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "qa_chain" not in st.session_state:
-    st.session_state.qa_chain = None
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
 
 # ── PDF Upload ────────────────────────────────────────────────────────────────
 uploaded_file = st.file_uploader("Upload your PDF", type="pdf")
 
-if uploaded_file and st.session_state.qa_chain is None:
+if uploaded_file and st.session_state.vectorstore is None:
     with st.spinner("Processing PDF... please wait ⏳"):
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -47,27 +46,16 @@ if uploaded_file and st.session_state.qa_chain is None:
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         chunks = splitter.split_documents(pages)
 
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-        vectorstore = FAISS.from_documents(chunks, embeddings)
-
-        memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            output_key="answer"
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            google_api_key=GOOGLE_API_KEY
         )
-
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
-        st.session_state.qa_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
-            memory=memory,
-            return_source_documents=True
-        )
+        st.session_state.vectorstore = FAISS.from_documents(chunks, embeddings)
 
     st.success(f"✅ PDF processed! ({len(pages)} pages, {len(chunks)} chunks)")
 
 # ── Chat Interface ────────────────────────────────────────────────────────────
-if st.session_state.qa_chain:
+if st.session_state.vectorstore:
 
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
@@ -81,18 +69,40 @@ if st.session_state.qa_chain:
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                result = st.session_state.qa_chain.invoke({"question": user_question})
-                answer = result["answer"]
-                source_docs = result.get("source_documents", [])
+                # Get relevant chunks
+                docs = st.session_state.vectorstore.similarity_search(user_question, k=3)
+                context = "\n\n".join([doc.page_content for doc in docs])
+
+                # Build chat history string
+                history_text = ""
+                for msg in st.session_state.chat_history[-4:]:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    history_text += f"{role}: {msg['content']}\n"
+
+                # Call Gemini directly
+                model = genai.GenerativeModel("gemini-1.5-flash")
+                prompt = f"""You are a helpful assistant. Answer the question based on the context below.
+
+Context from PDF:
+{context}
+
+Previous conversation:
+{history_text}
+
+Question: {user_question}
+
+Answer:"""
+                response = model.generate_content(prompt)
+                answer = response.text
 
             st.write(answer)
 
-            if source_docs:
-                pages_cited = set()
-                for doc in source_docs:
-                    page_num = doc.metadata.get("page", "?")
-                    pages_cited.add(page_num + 1 if isinstance(page_num, int) else page_num)
-                st.caption(f"📌 Sources: Page(s) {', '.join(str(p) for p in sorted(pages_cited))}")
+            # Show source pages
+            pages_cited = set()
+            for doc in docs:
+                page_num = doc.metadata.get("page", "?")
+                pages_cited.add(page_num + 1 if isinstance(page_num, int) else page_num)
+            st.caption(f"📌 Sources: Page(s) {', '.join(str(p) for p in sorted(pages_cited))}")
 
         st.session_state.chat_history.append({"role": "user", "content": user_question})
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
