@@ -4,10 +4,10 @@ import tempfile
 from dotenv import load_dotenv
 
 import google.generativeai as genai
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="PDF Chatbot", page_icon="📄")
@@ -46,9 +46,9 @@ if uploaded_file and st.session_state.vectorstore is None:
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         chunks = splitter.split_documents(pages)
 
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
-            google_api_key=GOOGLE_API_KEY
+        # Free HuggingFace embeddings - no API key needed!
+        embeddings = HuggingFaceEmbeddings(
+            model_name="all-MiniLM-L6-v2"
         )
         st.session_state.vectorstore = FAISS.from_documents(chunks, embeddings)
 
@@ -69,17 +69,14 @@ if st.session_state.vectorstore:
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                # Get relevant chunks
                 docs = st.session_state.vectorstore.similarity_search(user_question, k=3)
                 context = "\n\n".join([doc.page_content for doc in docs])
 
-                # Build chat history string
                 history_text = ""
                 for msg in st.session_state.chat_history[-4:]:
                     role = "User" if msg["role"] == "user" else "Assistant"
                     history_text += f"{role}: {msg['content']}\n"
 
-                # Call Gemini directly
                 model = genai.GenerativeModel("gemini-1.5-flash")
                 prompt = f"""You are a helpful assistant. Answer the question based on the context below.
 
@@ -97,7 +94,6 @@ Answer:"""
 
             st.write(answer)
 
-            # Show source pages
             pages_cited = set()
             for doc in docs:
                 page_num = doc.metadata.get("page", "?")
