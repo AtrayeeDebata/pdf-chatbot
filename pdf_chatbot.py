@@ -47,7 +47,7 @@ if uploaded_file and st.session_state.vectorstore is None:
         chunks = splitter.split_documents(pages)
 
         embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
+            model="models/text-embedding-004",
             google_api_key=GOOGLE_API_KEY
         )
         st.session_state.vectorstore = FAISS.from_documents(chunks, embeddings)
