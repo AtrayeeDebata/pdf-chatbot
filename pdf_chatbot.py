@@ -77,7 +77,7 @@ if st.session_state.vectorstore:
                     role = "User" if msg["role"] == "user" else "Assistant"
                     history_text += f"{role}: {msg['content']}\n"
 
-                model = genai.GenerativeModel("gemini-1.5-flash")
+                model = genai.GenerativeModel("gemini-2.0-flash")
                 prompt = f"""You are a helpful assistant. Answer the question based on the context below.
 
 Context from PDF:
