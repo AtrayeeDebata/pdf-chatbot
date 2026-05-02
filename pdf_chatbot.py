@@ -2,8 +2,7 @@ import os
 import streamlit as st
 import tempfile
 from dotenv import load_dotenv
-
-import google.generativeai as genai
+from groq import Groq
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -16,13 +15,11 @@ st.caption("Upload a PDF and ask questions about it!")
 
 # ── API Key ───────────────────────────────────────────────────────────────────
 load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not GOOGLE_API_KEY:
-    st.error("GOOGLE_API_KEY not found! Add it to Streamlit Secrets.")
+if not GROQ_API_KEY:
+    st.error("GROQ_API_KEY not found! Add it to Streamlit Secrets.")
     st.stop()
-
-genai.configure(api_key=GOOGLE_API_KEY)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "chat_history" not in st.session_state:
@@ -46,10 +43,7 @@ if uploaded_file and st.session_state.vectorstore is None:
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         chunks = splitter.split_documents(pages)
 
-        # Free HuggingFace embeddings - no API key needed!
-        embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2"
-        )
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         st.session_state.vectorstore = FAISS.from_documents(chunks, embeddings)
 
     st.success(f"✅ PDF processed! ({len(pages)} pages, {len(chunks)} chunks)")
@@ -77,10 +71,16 @@ if st.session_state.vectorstore:
                     role = "User" if msg["role"] == "user" else "Assistant"
                     history_text += f"{role}: {msg['content']}\n"
 
-                model = genai.GenerativeModel("gemini-2.0-flash")
-                prompt = f"""You are a helpful assistant. Answer the question based on the context below.
-
-Context from PDF:
+                client = Groq(api_key=GROQ_API_KEY)
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that answers questions based on the provided PDF context."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"""Context from PDF:
 {context}
 
 Previous conversation:
@@ -88,9 +88,12 @@ Previous conversation:
 
 Question: {user_question}
 
-Answer:"""
-                response = model.generate_content(prompt)
-                answer = response.text
+Answer based on the context:"""
+                        }
+                    ],
+                    model="llama-3.3-70b-versatile"
+                )
+                answer = chat_completion.choices[0].message.content
 
             st.write(answer)
 
